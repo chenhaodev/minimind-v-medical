@@ -11,7 +11,7 @@ Output columns:
   image_bytes    pa.binary()  — JPEG-compressed image bytes (single image per row)
 
 Sources:
-  PMC-VQA  (FreedomIntelligence/PMC-VQA)   — biomedical figures from PubMed (~227K)
+  PMC-VQA  (xmcmic/PMC-VQA)                — biomedical figures from PubMed (~227K)
   SLAKE    (BoKelvin/SLAKE)                 — multi-organ radiology EN+ZH (~14K)
   VQA-RAD  (flaviagiammarino/vqa-rad)       — radiology VQA (~3.5K)
   PathVQA  (flaviagiammarino/path-vqa)      — pathology VQA (~32K)
@@ -45,6 +45,7 @@ import json
 import os
 import random
 import sys
+import zipfile
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -138,50 +139,90 @@ def save_to_parquet(rows: list, output_path: str, batch_size: int = 1000) -> Non
     print(f"Saved {len(rows):,} rows → {output_path}")
 
 
+def _extract_zip_if_needed(zip_path: str, dest_dir: str) -> None:
+    if not os.path.exists(zip_path):
+        return
+    # Use a sentinel file to skip re-extraction on subsequent runs
+    sentinel = zip_path + ".extracted"
+    if os.path.exists(sentinel):
+        return
+    print(f"  Extracting {os.path.basename(zip_path)}…")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_dir)
+    open(sentinel, "w").close()
+
+
 def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_quality: int = 85) -> list:
     try:
-        from datasets import load_dataset
+        import pandas as pd
+        from huggingface_hub import snapshot_download
     except ImportError:
-        print("ERROR: `datasets` not installed. Run: pip install datasets", file=sys.stderr)
+        print(
+            "ERROR: huggingface-hub and pandas required. "
+            "Run: pip install huggingface-hub pandas",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print("Downloading PMC-VQA from HuggingFace (xmcmic/PMC-VQA)…")
-    ds = load_dataset("xmcmic/PMC-VQA", split="train")
-    print(f"  {len(ds):,} rows, columns: {ds.column_names}")
+    local_dir = snapshot_download(repo_id="xmcmic/PMC-VQA", repo_type="dataset")
+    print(f"  Cached at: {local_dir}")
+
+    # Extract image archives (one-time; sentinel file skips on reruns)
+    _extract_zip_if_needed(os.path.join(local_dir, "images.zip"), local_dir)
+    _extract_zip_if_needed(os.path.join(local_dir, "images_2.zip"), local_dir)
+
+    # Load train CSVs separately — they have different schemas (different columns)
+    dfs: list = []
+    for fname in ("train.csv", "train_2.csv"):
+        fpath = os.path.join(local_dir, fname)
+        if os.path.exists(fpath):
+            dfs.append(pd.read_csv(fpath, low_memory=False))
+    if not dfs:
+        print("ERROR: no train CSV files found in downloaded dataset", file=sys.stderr)
+        sys.exit(1)
+    df = pd.concat(dfs, ignore_index=True)
+    print(f"  {len(df):,} rows total across train CSVs")
+
+    if max_samples is not None and len(df) > max_samples:
+        df = df.sample(n=max_samples, random_state=seed).reset_index(drop=True)
 
     rows: list = []
     seen: set = set()
     skipped = 0
     dupes = 0
 
-    for i, row in enumerate(ds):
+    for i, row in df.iterrows():
         if i % 10000 == 0:
-            print(f"  Processing PMC-VQA {i:,}/{len(ds):,}…")
+            print(f"  Processing PMC-VQA {i:,}/{len(df):,}…")
 
-        img_field = next((row.get(f) for f in _IMG_FIELDS if row.get(f) is not None), None)
-        img = _open_image_field(img_field) if img_field is not None else None
+        fig_path = str(row.get("Figure_path") or "").strip()
+        img = None
+        if fig_path:
+            full_path = os.path.join(local_dir, fig_path)
+            if os.path.exists(full_path):
+                try:
+                    img = Image.open(full_path)
+                except Exception:
+                    pass
         if img is None:
             skipped += 1
             continue
 
-        question = next((row.get(f) for f in _Q_FIELDS if row.get(f)), "") or ""
-        choice_texts: list = []
-        for letter in _CHOICE_LETTERS:
-            val = row.get(f"Choice {letter}") or row.get(f"choice_{letter.lower()}") or ""
-            if val:
-                choice_texts.append(val)
+        question = str(row.get("Question") or "").strip()
 
-        answer = str(next((row.get(f) for f in _A_FIELDS if row.get(f)), None) or "")
-        answer_letter = answer.strip().upper()
-        if answer_letter in _CHOICE_LETTERS and choice_texts:
-            idx = _CHOICE_LETTERS.index(answer_letter)
-            if idx < len(choice_texts):
-                answer = choice_texts[idx]
+        # Answer column may be a choice letter (A/B/C/D) — resolve to text when possible
+        answer_raw = str(row.get("Answer") or row.get("Answer_label") or "").strip()
+        answer = answer_raw
+        if answer_raw.upper() in _CHOICE_LETTERS:
+            choice_val = str(row.get(f"Choice {answer_raw.upper()}") or "").strip()
+            if choice_val:
+                answer = choice_val
+
         if not question or not answer:
             skipped += 1
             continue
 
-        # Dedup on normalized (question, answer) inline — avoids buffering full dataset
         key = hashlib.md5(
             (" ".join(question.lower().split()) + "|||" + " ".join(answer.lower().split())).encode()
         ).hexdigest()
@@ -194,9 +235,6 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
             "conversations": json.dumps(build_conversations(question, answer), ensure_ascii=False),
             "image_bytes": pil_to_bytes(img, quality=image_quality),
         })
-
-        if max_samples is not None and len(rows) >= max_samples:
-            break
 
     print(f"  PMC-VQA: {len(rows):,} unique rows ({skipped} invalid, {dupes} duplicates removed)")
     return rows
