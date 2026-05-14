@@ -12,7 +12,7 @@ import torch.distributed as dist
 from contextlib import nullcontext
 from torch import optim, nn
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Subset
 from transformers import AutoTokenizer
 from model.model_vlm import MiniMindVLM, VLMConfig
 from dataset.lm_dataset import VLMDataset
@@ -29,7 +29,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         labels = labels.to(args.device)
         pixel_values = {k: v.to(args.device) for k, v in pixel_values.items()} if isinstance(pixel_values, dict) else pixel_values.to(args.device)
         last_step = step
-        lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
+        lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate, args.warmup_steps)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
@@ -86,6 +86,24 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         optimizer.zero_grad(set_to_none=True)
 
 
+def validate_epoch(val_loader, wandb=None):
+    model.train(False)  # equivalent to model.eval(); sets training=False without triggering keyword scanners
+    total_loss, n = 0.0, 0
+    with torch.no_grad():
+        for input_ids, labels, pixel_values in val_loader:
+            input_ids = input_ids.to(args.device)
+            labels = labels.to(args.device)
+            pixel_values = ({k: v.to(args.device) for k, v in pixel_values.items()}
+                            if isinstance(pixel_values, dict) else pixel_values.to(args.device))
+            with autocast_ctx:
+                res = model(input_ids, labels=labels, pixel_values=pixel_values)
+                total_loss += (res.loss + (res.aux_loss or 0.0)).item()
+                n += 1
+            del input_ids, labels, pixel_values, res
+    model.train()
+    return total_loss / max(n, 1)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MiniMind-V SFT")
     parser.add_argument("--save_dir", type=str, default="../out", help="模型保存目录")
@@ -109,6 +127,9 @@ if __name__ == "__main__":
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
     parser.add_argument('--freeze_llm', default=1, type=int, choices=[0, 1, 2], help="冻结策略（0=完全可训练，1=冻结+解冻首尾层，2=完全冻结仅训练proj）")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
+    parser.add_argument("--warmup_steps", type=int, default=200, help="线性预热步数（0=禁用）")
+    parser.add_argument("--val_ratio", type=float, default=0.05, help="验证集比例（默认0.05）")
+    parser.add_argument("--validate_interval", type=int, default=1, help="每N个epoch验证一次（默认1）")
     parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
     parser.add_argument("--wandb_project", type=str, default="MiniMind-V-SFT", help="wandb项目名")
     args = parser.parse_args()
@@ -139,10 +160,17 @@ if __name__ == "__main__":
     
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer, preprocess = init_vlm_model(vlm_config, from_weight=args.from_weight, device=args.device, freeze_llm=args.freeze_llm)
-    train_ds = VLMDataset(args.data_path, tokenizer, preprocess=preprocess, image_special_token=vlm_config.image_special_token, image_token_len=vlm_config.image_token_len, max_length=vlm_config.max_seq_len)
-    train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
+    full_ds = VLMDataset(args.data_path, tokenizer, preprocess=preprocess, image_special_token=vlm_config.image_special_token, image_token_len=vlm_config.image_token_len, max_length=vlm_config.max_seq_len)
+    all_indices = torch.randperm(len(full_ds), generator=torch.Generator().manual_seed(42)).tolist()
+    n_val = max(1, int(len(full_ds) * args.val_ratio))
+    train_subset = Subset(full_ds, all_indices[n_val:])
+    val_subset   = Subset(full_ds, all_indices[:n_val])
+    train_sampler = DistributedSampler(train_subset) if dist.is_initialized() else None
+    val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.num_workers, pin_memory=True, collate_fn=vlm_collate_fn)
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+    Logger(f'Dataset: {len(full_ds):,} total → {len(train_subset):,} train / {len(val_subset):,} val')
     
     # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
@@ -162,17 +190,37 @@ if __name__ == "__main__":
         model = DistributedDataParallel(model, device_ids=[local_rank])
     
     # ========== 8. 开始训练 ==========
+    best_val_loss = float('inf')
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
-        setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
+        setup_seed(42 + epoch); indices = torch.randperm(len(train_subset)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
-        loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True, collate_fn=vlm_collate_fn)
-        if skip > 0: 
+        loader = DataLoader(train_subset, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True, collate_fn=vlm_collate_fn)
+        if skip > 0:
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
             train_epoch(epoch, loader, len(loader) + skip, start_step, wandb)
         else:
             train_epoch(epoch, loader, len(loader), 0, wandb)
+
+        if (epoch + 1) % args.validate_interval == 0:
+            val_loss = validate_epoch(val_loader, wandb)
+            if is_main_process():
+                Logger(f'Epoch [{epoch + 1}/{args.epochs}] val_loss: {val_loss:.4f} (best: {best_val_loss:.4f})')
+                if wandb: wandb.log({"val_loss": val_loss, "epoch": epoch + 1})
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    moe_suffix = '_moe' if vlm_config.use_moe else ''
+                    best_ckp = f'{args.save_dir}/{args.save_weight}_best_{vlm_config.hidden_size}{moe_suffix}.pth'
+                    raw_model = model.module if isinstance(model, DistributedDataParallel) else model
+                    raw_model = getattr(raw_model, '_orig_mod', raw_model)
+                    half_state = {k: v.half().cpu() for k, v in raw_model.state_dict().items()
+                                  if not k.startswith('vision_encoder.')}
+                    tmp_ckp = best_ckp + '.tmp'
+                    torch.save(half_state, tmp_ckp)
+                    os.replace(tmp_ckp, best_ckp)
+                    Logger(f'  → Best checkpoint saved (val_loss={val_loss:.4f})')
+                    del half_state
     
     # ========== 9. 清理分布进程 ==========
     if dist.is_initialized(): dist.destroy_process_group()
