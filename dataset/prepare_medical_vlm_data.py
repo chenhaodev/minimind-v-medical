@@ -13,6 +13,8 @@ Output columns:
 Sources:
   PMC-VQA  (FreedomIntelligence/PMC-VQA)   — biomedical figures from PubMed (~227K)
   SLAKE    (BoKelvin/SLAKE)                 — multi-organ radiology EN+ZH (~14K)
+  VQA-RAD  (flaviagiammarino/vqa-rad)       — radiology VQA (~3.5K)
+  PathVQA  (flaviagiammarino/path-vqa)      — pathology VQA (~32K)
 
 Fast-SFT recommended usage (~50K PMC-VQA + 5K SLAKE + 2K general):
     python dataset/prepare_medical_vlm_data.py \
@@ -59,14 +61,8 @@ _A_FIELDS = ("Answer", "answer")
 _CHOICE_LETTERS = ("A", "B", "C", "D")
 _REQUIRED_GENERAL_COLUMNS = ("conversations", "image_bytes")
 
-# SLAKE field names (BoKelvin/SLAKE on HuggingFace)
 _SLAKE_IMG_FIELDS = ("img_content", "image", "img")
-
-# VQA-RAD field names (flaviagiammarino/vqa-rad on HuggingFace)
-_VQA_RAD_IMG_FIELDS = ("image", "img")
-
-# PathVQA field names (flaviagiammarino/path-vqa on HuggingFace)
-_PATH_VQA_IMG_FIELDS = ("image", "img")
+_HF_VQA_IMG_FIELDS = ("image", "img")
 
 
 def _parse_mix_general_ratio(value: str) -> float:
@@ -204,15 +200,22 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
     return rows
 
 
-def download_slake(max_samples: "int | None" = None, seed: int = 42, image_quality: int = 85) -> list:
+def _download_hf_vqa(
+    hf_id: str,
+    name: str,
+    img_fields: tuple,
+    max_samples: "int | None" = None,
+    image_quality: int = 85,
+    log_interval: int = 1000,
+) -> list:
     try:
         from datasets import load_dataset
     except ImportError:
         print("ERROR: `datasets` not installed. Run: pip install datasets", file=sys.stderr)
         sys.exit(1)
 
-    print("Downloading SLAKE from HuggingFace (BoKelvin/SLAKE)…")
-    ds = load_dataset("BoKelvin/SLAKE", split="train", trust_remote_code=True)
+    print(f"Downloading {name} from HuggingFace ({hf_id})…")
+    ds = load_dataset(hf_id, split="train", trust_remote_code=True)
     print(f"  {len(ds):,} rows, columns: {ds.column_names}")
 
     rows: list = []
@@ -221,10 +224,10 @@ def download_slake(max_samples: "int | None" = None, seed: int = 42, image_quali
     dupes = 0
 
     for i, row in enumerate(ds):
-        if i % 1000 == 0:
-            print(f"  Processing SLAKE {i:,}/{len(ds):,}…")
+        if i % log_interval == 0:
+            print(f"  Processing {name} {i:,}/{len(ds):,}…")
 
-        img_field = next((row.get(f) for f in _SLAKE_IMG_FIELDS if row.get(f) is not None), None)
+        img_field = next((row.get(f) for f in img_fields if row.get(f) is not None), None)
         img = _open_image_field(img_field) if img_field is not None else None
         if img is None:
             skipped += 1
@@ -252,112 +255,20 @@ def download_slake(max_samples: "int | None" = None, seed: int = 42, image_quali
         if max_samples is not None and len(rows) >= max_samples:
             break
 
-    print(f"  SLAKE: {len(rows):,} unique rows ({skipped} invalid, {dupes} duplicates removed)")
+    print(f"  {name}: {len(rows):,} unique rows ({skipped} invalid, {dupes} duplicates removed)")
     return rows
 
 
-def download_vqa_rad(max_samples: "int | None" = None, seed: int = 42, image_quality: int = 85) -> list:
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("ERROR: `datasets` not installed. Run: pip install datasets", file=sys.stderr)
-        sys.exit(1)
-
-    print("Downloading VQA-RAD from HuggingFace (flaviagiammarino/vqa-rad)…")
-    ds = load_dataset("flaviagiammarino/vqa-rad", split="train", trust_remote_code=True)
-    print(f"  {len(ds):,} rows, columns: {ds.column_names}")
-
-    rows: list = []
-    seen: set = set()
-    skipped = 0
-    dupes = 0
-
-    for i, row in enumerate(ds):
-        if i % 500 == 0:
-            print(f"  Processing VQA-RAD {i:,}/{len(ds):,}…")
-
-        img_field = next((row.get(f) for f in _VQA_RAD_IMG_FIELDS if row.get(f) is not None), None)
-        img = _open_image_field(img_field) if img_field is not None else None
-        if img is None:
-            skipped += 1
-            continue
-
-        question = next((row.get(f) for f in _Q_FIELDS if row.get(f)), "") or ""
-        answer = str(next((row.get(f) for f in _A_FIELDS if row.get(f)), None) or "")
-        if not question or not answer:
-            skipped += 1
-            continue
-
-        key = hashlib.md5(
-            (" ".join(question.lower().split()) + "|||" + " ".join(answer.lower().split())).encode()
-        ).hexdigest()
-        if key in seen:
-            dupes += 1
-            continue
-        seen.add(key)
-
-        rows.append({
-            "conversations": json.dumps(build_conversations(question, answer), ensure_ascii=False),
-            "image_bytes": pil_to_bytes(img, quality=image_quality),
-        })
-
-        if max_samples is not None and len(rows) >= max_samples:
-            break
-
-    print(f"  VQA-RAD: {len(rows):,} unique rows ({skipped} invalid, {dupes} duplicates removed)")
-    return rows
+def download_slake(max_samples: "int | None" = None, image_quality: int = 85) -> list:
+    return _download_hf_vqa("BoKelvin/SLAKE", "SLAKE", _SLAKE_IMG_FIELDS, max_samples, image_quality, log_interval=1000)
 
 
-def download_path_vqa(max_samples: "int | None" = None, seed: int = 42, image_quality: int = 85) -> list:
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("ERROR: `datasets` not installed. Run: pip install datasets", file=sys.stderr)
-        sys.exit(1)
+def download_vqa_rad(max_samples: "int | None" = None, image_quality: int = 85) -> list:
+    return _download_hf_vqa("flaviagiammarino/vqa-rad", "VQA-RAD", _HF_VQA_IMG_FIELDS, max_samples, image_quality, log_interval=500)
 
-    print("Downloading PathVQA from HuggingFace (flaviagiammarino/path-vqa)…")
-    ds = load_dataset("flaviagiammarino/path-vqa", split="train", trust_remote_code=True)
-    print(f"  {len(ds):,} rows, columns: {ds.column_names}")
 
-    rows: list = []
-    seen: set = set()
-    skipped = 0
-    dupes = 0
-
-    for i, row in enumerate(ds):
-        if i % 2000 == 0:
-            print(f"  Processing PathVQA {i:,}/{len(ds):,}…")
-
-        img_field = next((row.get(f) for f in _PATH_VQA_IMG_FIELDS if row.get(f) is not None), None)
-        img = _open_image_field(img_field) if img_field is not None else None
-        if img is None:
-            skipped += 1
-            continue
-
-        question = next((row.get(f) for f in _Q_FIELDS if row.get(f)), "") or ""
-        answer = str(next((row.get(f) for f in _A_FIELDS if row.get(f)), None) or "")
-        if not question or not answer:
-            skipped += 1
-            continue
-
-        key = hashlib.md5(
-            (" ".join(question.lower().split()) + "|||" + " ".join(answer.lower().split())).encode()
-        ).hexdigest()
-        if key in seen:
-            dupes += 1
-            continue
-        seen.add(key)
-
-        rows.append({
-            "conversations": json.dumps(build_conversations(question, answer), ensure_ascii=False),
-            "image_bytes": pil_to_bytes(img, quality=image_quality),
-        })
-
-        if max_samples is not None and len(rows) >= max_samples:
-            break
-
-    print(f"  PathVQA: {len(rows):,} unique rows ({skipped} invalid, {dupes} duplicates removed)")
-    return rows
+def download_path_vqa(max_samples: "int | None" = None, image_quality: int = 85) -> list:
+    return _download_hf_vqa("flaviagiammarino/path-vqa", "PathVQA", _HF_VQA_IMG_FIELDS, max_samples, image_quality, log_interval=2000)
 
 
 def load_general_sample(parquet_path: str, n_samples: int, seed: int = 42) -> list:
@@ -435,23 +346,17 @@ def main():
     max_pmc = args.max_pmc_vqa if args.max_pmc_vqa > 0 else None
     medical_rows = download_pmc_vqa(max_samples=max_pmc, seed=args.seed, image_quality=args.image_quality)
 
-    if args.max_slake != 0:
-        max_slake = args.max_slake if args.max_slake > 0 else None
-        medical_rows = medical_rows + download_slake(
-            max_samples=max_slake, seed=args.seed, image_quality=args.image_quality
-        )
-
-    if args.max_vqa_rad != 0:
-        max_vqa_rad = args.max_vqa_rad if args.max_vqa_rad > 0 else None
-        medical_rows = medical_rows + download_vqa_rad(
-            max_samples=max_vqa_rad, seed=args.seed, image_quality=args.image_quality
-        )
-
-    if args.max_path_vqa != 0:
-        max_path_vqa = args.max_path_vqa if args.max_path_vqa > 0 else None
-        medical_rows = medical_rows + download_path_vqa(
-            max_samples=max_path_vqa, seed=args.seed, image_quality=args.image_quality
-        )
+    for attr, fn in (
+        ("max_slake",    download_slake),
+        ("max_vqa_rad",  download_vqa_rad),
+        ("max_path_vqa", download_path_vqa),
+    ):
+        limit = getattr(args, attr)
+        if limit != 0:
+            medical_rows.extend(fn(
+                max_samples=limit if limit > 0 else None,
+                image_quality=args.image_quality,
+            ))
 
     all_rows = medical_rows
     if args.mix_general_ratio > 0.0:

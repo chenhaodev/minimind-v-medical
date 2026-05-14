@@ -214,11 +214,13 @@ if __name__ == "__main__":
                     best_ckp = f'{args.save_dir}/{args.save_weight}_best_{vlm_config.hidden_size}{moe_suffix}.pth'
                     raw_model = model.module if isinstance(model, DistributedDataParallel) else model
                     raw_model = getattr(raw_model, '_orig_mod', raw_model)
-                    state_dict = {k: v for k, v in raw_model.state_dict().items()
+                    half_state = {k: v.half().cpu() for k, v in raw_model.state_dict().items()
                                   if not k.startswith('vision_encoder.')}
-                    torch.save({k: v.half().cpu() for k, v in state_dict.items()}, best_ckp)
+                    tmp_ckp = best_ckp + '.tmp'
+                    torch.save(half_state, tmp_ckp)
+                    os.replace(tmp_ckp, best_ckp)
                     Logger(f'  → Best checkpoint saved (val_loss={val_loss:.4f})')
-                    del state_dict
+                    del half_state
     
     # ========== 9. 清理分布进程 ==========
     if dist.is_initialized(): dist.destroy_process_group()
