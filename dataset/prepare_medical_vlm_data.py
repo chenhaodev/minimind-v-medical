@@ -45,6 +45,7 @@ _IMG_FIELDS = ("Figure", "image", "fig")
 _Q_FIELDS = ("Question", "question")
 _A_FIELDS = ("Answer", "answer")
 _CHOICE_LETTERS = ("A", "B", "C", "D")
+_REQUIRED_GENERAL_COLUMNS = ("conversations", "image_bytes")
 
 
 def _parse_mix_general_ratio(value: str) -> float:
@@ -61,6 +62,21 @@ def _parse_mix_general_ratio(value: str) -> float:
             "(r=0 disables general mix; r=1 is invalid)"
         )
     return ratio
+
+
+def _parse_image_quality(value: str) -> int:
+    """Parse Pillow JPEG quality; valid values are 1 through 95."""
+    try:
+        quality = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "image_quality must be an integer"
+        ) from exc
+    if quality < 1 or quality > 95:
+        raise argparse.ArgumentTypeError(
+            "image_quality must satisfy 1 <= quality <= 95"
+        )
+    return quality
 
 
 def _open_image_field(img_field) -> "Image.Image | None":
@@ -113,6 +129,7 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
         sys.exit(1)
 
     print("Downloading PMC-VQA from HuggingFace (FreedomIntelligence/PMC-VQA)…")
+    # PMC-VQA requires its dataset loader; only use trusted dataset sources here.
     ds = load_dataset("FreedomIntelligence/PMC-VQA", split="train", trust_remote_code=True)
     print(f"  {len(ds):,} rows, columns: {ds.column_names}")
 
@@ -173,6 +190,16 @@ def load_general_sample(parquet_path: str, n_samples: int, seed: int = 42) -> li
         print(f"WARNING: general parquet not found at {parquet_path}, skipping mix", file=sys.stderr)
         return []
 
+    available_columns = set(pf.schema_arrow.names)
+    missing_columns = [
+        col for col in _REQUIRED_GENERAL_COLUMNS if col not in available_columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            "General parquet missing required columns: "
+            f"{', '.join(missing_columns)}"
+        )
+
     total = pf.metadata.num_rows
     n_samples = min(n_samples, total)
     print(f"  General sample: {n_samples:,} of {total:,} rows")
@@ -216,7 +243,9 @@ def main():
     )
     parser.add_argument("--general_parquet",   default="./dataset/sft_i2t.parquet")
     parser.add_argument("--seed",              type=int,   default=42)
-    parser.add_argument("--image_quality",     type=int,   default=85,
+    parser.add_argument("--image_quality",
+                        type=_parse_image_quality,
+                        default=85,
                         help="JPEG quality 1–95 (lower = smaller files)")
     args = parser.parse_args()
 
