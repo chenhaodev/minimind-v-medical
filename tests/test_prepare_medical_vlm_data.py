@@ -14,6 +14,7 @@ from trainer.trainer_utils import get_lr
 from dataset.prepare_medical_vlm_data import (
     _parse_mix_general_ratio,
     _parse_image_quality,
+    download_pmc_vqa,
     download_slake,
     download_vqa_rad,
     download_path_vqa,
@@ -335,6 +336,93 @@ class TestDownloadPathVqa(unittest.TestCase):
 
     def test_image_bytes_is_valid_jpeg(self):
         rows = [_make_path_vqa_row("Grade?", "low")]
+        result = self._run(rows)
+        img = Image.open(io.BytesIO(result[0]["image_bytes"]))
+        self.assertEqual(img.format, "JPEG")
+
+
+_DEFAULT_CHOICES = ("Liver", "Kidney", "Pancreas", "Spleen")
+
+
+def _make_pmc_vqa_row(
+    question: str,
+    answer: str,
+    choices: tuple = _DEFAULT_CHOICES,
+    img: "Image.Image | None" = None,
+) -> dict:
+    return {
+        "Question": question,
+        "Answer": answer,
+        "Choice A": choices[0] if len(choices) > 0 else "",
+        "Choice B": choices[1] if len(choices) > 1 else "",
+        "Choice C": choices[2] if len(choices) > 2 else "",
+        "Choice D": choices[3] if len(choices) > 3 else "",
+        "Figure": img or _make_rgb_image(),
+    }
+
+
+class TestDownloadPmcVqa(unittest.TestCase):
+    def _run(self, rows: list, **kwargs) -> list:
+        mock_ds = MagicMock()
+        mock_ds.__iter__ = MagicMock(return_value=iter(rows))
+        mock_ds.__len__ = MagicMock(return_value=len(rows))
+        mock_ds.column_names = ["Question", "Answer", "Choice A", "Choice B", "Choice C", "Choice D", "Figure"]
+        mock_datasets = MagicMock()
+        mock_datasets.load_dataset.return_value = mock_ds
+        with patch.dict("sys.modules", {"datasets": mock_datasets}):
+            return download_pmc_vqa(**kwargs)
+
+    def test_resolves_letter_answer_to_choice_text(self):
+        rows = [_make_pmc_vqa_row("What organ is this?", "A")]
+        result = self._run(rows)
+        parsed = json.loads(result[0]["conversations"])
+        assistant_content = next(m["content"] for m in parsed if m["role"] == "assistant")
+        self.assertEqual(assistant_content, "Liver")
+
+    def test_strips_choices_from_question(self):
+        rows = [_make_pmc_vqa_row("What organ is this?", "B")]
+        result = self._run(rows)
+        parsed = json.loads(result[0]["conversations"])
+        user_content = next(m["content"] for m in parsed if m["role"] == "user")
+        self.assertNotIn("A.", user_content)
+        self.assertNotIn("Liver", user_content)
+
+    def test_non_letter_answer_kept_as_is(self):
+        rows = [_make_pmc_vqa_row("What is shown?", "trachea")]
+        result = self._run(rows)
+        parsed = json.loads(result[0]["conversations"])
+        assistant_content = next(m["content"] for m in parsed if m["role"] == "assistant")
+        self.assertEqual(assistant_content, "trachea")
+
+    def test_skips_rows_with_missing_image(self):
+        rows = [
+            {"Question": "Q?", "Answer": "A", "Choice A": "X", "Choice B": "", "Choice C": "", "Choice D": "", "Figure": None},
+            _make_pmc_vqa_row("Valid?", "B"),
+        ]
+        result = self._run(rows)
+        self.assertEqual(len(result), 1)
+
+    def test_skips_rows_with_empty_question_or_answer(self):
+        rows = [
+            _make_pmc_vqa_row("", "A"),
+            _make_pmc_vqa_row("Some question?", ""),
+            _make_pmc_vqa_row("Valid?", "C"),
+        ]
+        result = self._run(rows)
+        self.assertEqual(len(result), 1)
+
+    def test_deduplicates_on_resolved_answer(self):
+        rows = [_make_pmc_vqa_row("Same Q?", "A")] * 3
+        result = self._run(rows)
+        self.assertEqual(len(result), 1)
+
+    def test_max_samples_caps_output(self):
+        rows = [_make_pmc_vqa_row(f"Q{i}?", "A") for i in range(10)]
+        result = self._run(rows, max_samples=3)
+        self.assertEqual(len(result), 3)
+
+    def test_image_bytes_is_valid_jpeg(self):
+        rows = [_make_pmc_vqa_row("Structure?", "D")]
         result = self._run(rows)
         img = Image.open(io.BytesIO(result[0]["image_bytes"]))
         self.assertEqual(img.format, "JPEG")

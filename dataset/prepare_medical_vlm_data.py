@@ -166,15 +166,18 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
             continue
 
         question = next((row.get(f) for f in _Q_FIELDS if row.get(f)), "") or ""
-        choices = []
+        choice_texts: list = []
         for letter in _CHOICE_LETTERS:
             val = row.get(f"Choice {letter}") or row.get(f"choice_{letter.lower()}") or ""
             if val:
-                choices.append(f"{letter}. {val}")
-        if choices:
-            question = question.rstrip() + "\n" + "\n".join(choices)
+                choice_texts.append(val)
 
         answer = str(next((row.get(f) for f in _A_FIELDS if row.get(f)), None) or "")
+        answer_letter = answer.strip().upper()
+        if answer_letter in _CHOICE_LETTERS and choice_texts:
+            idx = _CHOICE_LETTERS.index(answer_letter)
+            if idx < len(choice_texts):
+                answer = choice_texts[idx]
         if not question or not answer:
             skipped += 1
             continue
