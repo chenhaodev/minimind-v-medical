@@ -53,6 +53,8 @@ cp /tmp/medical-models/full_sft_medical_768.pth ./out/
 ## Data Preparation
 
 Download and convert [PMC-VQA](https://huggingface.co/datasets/FreedomIntelligence/PMC-VQA) to the training parquet format, with deduplication and an optional general visual grounding mix.
+The script enables HuggingFace `trust_remote_code=True` for the PMC-VQA
+loader, so only run it against trusted dataset sources.
 
 ### Fast-SFT dataset (~52K rows, recommended)
 
