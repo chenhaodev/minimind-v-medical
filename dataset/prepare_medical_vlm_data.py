@@ -152,7 +152,23 @@ def _extract_zip_if_needed(zip_path: str, dest_dir: str) -> None:
     open(sentinel, "w").close()
 
 
-def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_quality: int = 85) -> list:
+_PMC_VQA_SPLITS = ("all", "csv2", "none")
+
+
+def download_pmc_vqa(
+    max_samples: "int | None" = None,
+    seed: int = 42,
+    image_quality: int = 85,
+    split: str = "all",
+) -> list:
+    if split not in _PMC_VQA_SPLITS:
+        raise ValueError(
+            f"split must be one of {_PMC_VQA_SPLITS}; got {split!r}"
+        )
+    if split == "none":
+        print("Skipping PMC-VQA (--pmc_vqa_split=none)")
+        return []
+
     try:
         import pandas as pd
         from huggingface_hub import snapshot_download
@@ -164,17 +180,29 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
         )
         sys.exit(1)
 
-    print("Downloading PMC-VQA from HuggingFace (xmcmic/PMC-VQA)…")
-    local_dir = snapshot_download(repo_id="xmcmic/PMC-VQA", repo_type="dataset")
+    allow_patterns: "list | None" = None
+    csv_files: tuple = ("train.csv", "train_2.csv")
+    zip_files: tuple = ("images.zip", "images_2.zip")
+    if split == "csv2":
+        allow_patterns = ["train_2.csv", "images_2.zip"]
+        csv_files = ("train_2.csv",)
+        zip_files = ("images_2.zip",)
+
+    print(f"Downloading PMC-VQA from HuggingFace (xmcmic/PMC-VQA, split={split})…")
+    local_dir = snapshot_download(
+        repo_id="xmcmic/PMC-VQA",
+        repo_type="dataset",
+        allow_patterns=allow_patterns,
+    )
     print(f"  Cached at: {local_dir}")
 
     # Extract image archives (one-time; sentinel file skips on reruns)
-    _extract_zip_if_needed(os.path.join(local_dir, "images.zip"), local_dir)
-    _extract_zip_if_needed(os.path.join(local_dir, "images_2.zip"), local_dir)
+    for zname in zip_files:
+        _extract_zip_if_needed(os.path.join(local_dir, zname), local_dir)
 
     # Load train CSVs separately — they have different schemas (different columns)
     dfs: list = []
-    for fname in ("train.csv", "train_2.csv"):
+    for fname in csv_files:
         fpath = os.path.join(local_dir, fname)
         if os.path.exists(fpath):
             dfs.append(pd.read_csv(fpath, low_memory=False))
@@ -367,6 +395,17 @@ def main():
     parser.add_argument("--max_path_vqa",      type=int,   default=5000,
                         help="Max unique rows from PathVQA after dedup (default: 5000; set to 0 to skip)")
     parser.add_argument(
+        "--pmc_vqa_split",
+        choices=_PMC_VQA_SPLITS,
+        default="all",
+        help=(
+            "Which PMC-VQA split to download: "
+            "'all' = full ~21 GB (~227K rows, default); "
+            "'csv2' = images_2.zip only ~2.2 GB (~127K rows); "
+            "'none' = skip PMC-VQA entirely (0 GB)"
+        ),
+    )
+    parser.add_argument(
         "--mix_general_ratio",
         type=_parse_mix_general_ratio,
         default=0.1,
@@ -384,7 +423,12 @@ def main():
     args = parser.parse_args()
 
     max_pmc = args.max_pmc_vqa if args.max_pmc_vqa > 0 else None
-    medical_rows = download_pmc_vqa(max_samples=max_pmc, seed=args.seed, image_quality=args.image_quality)
+    medical_rows = download_pmc_vqa(
+        max_samples=max_pmc,
+        seed=args.seed,
+        image_quality=args.image_quality,
+        split=args.pmc_vqa_split,
+    )
 
     for attr, fn in (
         ("max_slake",    download_slake),

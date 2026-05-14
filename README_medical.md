@@ -76,6 +76,7 @@ python dataset/prepare_medical_vlm_data.py \
 | Flag | Default | Meaning |
 |---|---|---|
 | `--max_pmc_vqa` | `50000` | Unique PMC-VQA rows after dedup (0 = all ~227K) |
+| `--pmc_vqa_split` | `all` | Which PMC-VQA halves to download: `all` ≈ 21 GB / ~227K rows, `csv2` ≈ 2.2 GB / ~127K rows, `none` skips PMC-VQA entirely |
 | `--max_slake` | `5000` | Unique SLAKE rows after dedup (0 = skip source) |
 | `--max_vqa_rad` | `3000` | Unique VQA-RAD rows after dedup (0 = skip source) |
 | `--max_path_vqa` | `5000` | Unique PathVQA rows after dedup (0 = skip source) |
@@ -94,6 +95,43 @@ python dataset/prepare_medical_vlm_data.py \
     --max_slake 0 \
     --max_vqa_rad 0 \
     --max_path_vqa 0 \
+    --mix_general_ratio 0.1 \
+    --general_parquet ./dataset/sft_i2t.parquet
+```
+
+### Low-bandwidth setup
+
+The default first run pulls the full PMC-VQA archive (~21 GB: `images.zip` 18.9 GB + `images_2.zip` 2.2 GB). Use `--pmc_vqa_split` to cut that cost:
+
+| Split | Network | Disk after extract | Candidate rows |
+|---|---|---|---|
+| `all` (default) | ~21 GB | ~31 GB | ~227K |
+| `csv2` | ~2.2 GB | ~5 GB | ~127K |
+| `none` | 0 GB | 0 GB | 0 (use SLAKE/VQA-RAD/PathVQA only) |
+
+`--max_pmc_vqa` still caps rows after download for any split. Example using only the smaller `csv2` half:
+
+```bash
+python dataset/prepare_medical_vlm_data.py \
+    --output_path ./dataset/medical_vlm_sft.parquet \
+    --pmc_vqa_split csv2 \
+    --max_pmc_vqa 50000 \
+    --max_slake 5000 \
+    --max_vqa_rad 3000 \
+    --max_path_vqa 5000 \
+    --mix_general_ratio 0.1 \
+    --general_parquet ./dataset/sft_i2t.parquet
+```
+
+To skip PMC-VQA entirely (relies on SLAKE + VQA-RAD + PathVQA only, ~22K rows < 500 MB):
+
+```bash
+python dataset/prepare_medical_vlm_data.py \
+    --output_path ./dataset/medical_vlm_sft.parquet \
+    --pmc_vqa_split none \
+    --max_slake 5000 \
+    --max_vqa_rad 3000 \
+    --max_path_vqa 5000 \
     --mix_general_ratio 0.1 \
     --general_parquet ./dataset/sft_i2t.parquet
 ```

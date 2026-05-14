@@ -1,6 +1,7 @@
 import argparse
 import io
 import json
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,7 @@ from dataset.prepare_medical_vlm_data import (
     download_vqa_rad,
     download_path_vqa,
     load_general_sample,
+    main as prepare_main,
 )
 
 
@@ -405,6 +407,41 @@ class TestDownloadPmcVqa(unittest.TestCase):
         result = self._run(rows)
         img = Image.open(io.BytesIO(result[0]["image_bytes"]))
         self.assertEqual(img.format, "JPEG")
+
+
+class TestPmcVqaSplit(unittest.TestCase):
+    def test_split_none_short_circuits_without_hub_call(self):
+        mock_hf = MagicMock()
+        with patch.dict("sys.modules", {"huggingface_hub": mock_hf}):
+            result = download_pmc_vqa(split="none")
+        self.assertEqual(result, [])
+        mock_hf.snapshot_download.assert_not_called()
+
+    def test_split_csv2_passes_minimal_allow_patterns(self):
+        # Stop execution right after the hub call so we don't need to fake an
+        # entire local PMC-VQA layout, then assert the call shape.
+        mock_hf = MagicMock()
+        mock_hf.snapshot_download.side_effect = SystemExit("aborted post-hub")
+        with patch.dict("sys.modules", {"huggingface_hub": mock_hf}):
+            with self.assertRaises(SystemExit):
+                download_pmc_vqa(split="csv2")
+        mock_hf.snapshot_download.assert_called_once_with(
+            repo_id="xmcmic/PMC-VQA",
+            repo_type="dataset",
+            allow_patterns=["train_2.csv", "images_2.zip"],
+        )
+
+    def test_split_invalid_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            download_pmc_vqa(split="garbage")
+
+    def test_main_rejects_invalid_pmc_vqa_split(self):
+        with patch.object(
+            sys, "argv", ["prepare_medical_vlm_data.py", "--pmc_vqa_split", "garbage"]
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                prepare_main()
+        self.assertEqual(cm.exception.code, 2)
 
 
 if __name__ == "__main__":
