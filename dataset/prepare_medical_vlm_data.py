@@ -145,9 +145,8 @@ def download_pmc_vqa(max_samples: "int | None" = None, seed: int = 42, image_qua
         print("ERROR: `datasets` not installed. Run: pip install datasets", file=sys.stderr)
         sys.exit(1)
 
-    print("Downloading PMC-VQA from HuggingFace (FreedomIntelligence/PMC-VQA)…")
-    # PMC-VQA requires its dataset loader; only use trusted dataset sources here.
-    ds = load_dataset("FreedomIntelligence/PMC-VQA", split="train", trust_remote_code=True)
+    print("Downloading PMC-VQA from HuggingFace (xmcmic/PMC-VQA)…")
+    ds = load_dataset("xmcmic/PMC-VQA", split="train")
     print(f"  {len(ds):,} rows, columns: {ds.column_names}")
 
     rows: list = []
