@@ -97,7 +97,7 @@ def validate_epoch(val_loader, wandb=None):
                             if isinstance(pixel_values, dict) else pixel_values.to(args.device))
             with autocast_ctx:
                 res = model(input_ids, labels=labels, pixel_values=pixel_values)
-                total_loss += (res.loss + res.aux_loss).item()
+                total_loss += (res.loss + (res.aux_loss or 0.0)).item()
                 n += 1
             del input_ids, labels, pixel_values, res
     model.train()

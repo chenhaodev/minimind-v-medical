@@ -16,24 +16,24 @@ Sources:
   VQA-RAD  (flaviagiammarino/vqa-rad)       — radiology VQA (~3.5K)
   PathVQA  (flaviagiammarino/path-vqa)      — pathology VQA (~32K)
 
-Fast-SFT recommended usage (~50K PMC-VQA + 5K SLAKE + 2K general):
+Fast-SFT recommended usage (~63K medical + ~7K general):
+  Defaults: PMC-VQA 50K + SLAKE 5K + VQA-RAD 3K + PathVQA 5K, mix_general_ratio=0.1
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft.parquet \
         --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
 
-PMC-VQA only (original behaviour):
+PMC-VQA only:
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft.parquet \
-        --max_slake 0 \
+        --max_slake 0 --max_vqa_rad 0 --max_path_vqa 0 \
         --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
 
-Full deduplicated dataset:
+Full deduplicated dataset (all sources):
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft_full.parquet \
-        --max_pmc_vqa 0 \
-        --max_slake 0 \
+        --max_pmc_vqa 0 --max_slake 0 --max_vqa_rad 0 --max_path_vqa 0 \
         --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
 """
