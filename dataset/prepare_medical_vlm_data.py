@@ -11,13 +11,16 @@ Output columns:
   image_bytes    pa.binary()  — JPEG-compressed image bytes (single image per row)
 
 Sources:
-  PMC-VQA  (xmcmic/PMC-VQA)                — biomedical figures from PubMed (~227K)
+  PMC-VQA  (xmcmic/PMC-VQA)                — biomedical figures from PubMed
+                                              (~127K rows via csv2 split (default;
+                                              'all' yields ~227K))
   SLAKE    (BoKelvin/SLAKE)                 — multi-organ radiology EN+ZH (~14K)
   VQA-RAD  (flaviagiammarino/vqa-rad)       — radiology VQA (~3.5K)
   PathVQA  (flaviagiammarino/path-vqa)      — pathology VQA (~32K)
 
 Fast-SFT recommended usage (~63K medical + ~7K general):
-  Defaults: PMC-VQA 50K + SLAKE 5K + VQA-RAD 3K + PathVQA 5K, mix_general_ratio=0.1
+  Defaults: PMC-VQA 50K + SLAKE 5K + VQA-RAD 3K + PathVQA 5K,
+            pmc_vqa_split=csv2, mix_general_ratio=0.1
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft.parquet \
         --mix_general_ratio 0.1 \
@@ -33,6 +36,7 @@ PMC-VQA only:
 Full deduplicated dataset (all sources):
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft_full.parquet \
+        --pmc_vqa_split all \
         --max_pmc_vqa 0 --max_slake 0 --max_vqa_rad 0 --max_path_vqa 0 \
         --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
@@ -397,11 +401,11 @@ def main():
     parser.add_argument(
         "--pmc_vqa_split",
         choices=_PMC_VQA_SPLITS,
-        default="all",
+        default="csv2",
         help=(
             "Which PMC-VQA split to download: "
-            "'all' = full ~21 GB (~227K rows, default); "
-            "'csv2' = images_2.zip only ~2.2 GB (~127K rows); "
+            "'csv2' = images_2.zip only ~2.2 GB (~127K rows, default); "
+            "'all' = full ~21 GB (~227K rows); "
             "'none' = skip PMC-VQA entirely (0 GB)"
         ),
     )
