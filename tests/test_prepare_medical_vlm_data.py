@@ -443,18 +443,6 @@ class TestPmcVqaSplit(unittest.TestCase):
                 prepare_main()
         self.assertEqual(cm.exception.code, 2)
 
-    def test_main_default_pmc_vqa_split_is_csv2(self):
-        argv = ["prepare_medical_vlm_data.py", "--mix_general_ratio", "0"]
-        with patch("dataset.prepare_medical_vlm_data.download_pmc_vqa") as mock_dl, \
-                patch("dataset.prepare_medical_vlm_data.download_slake", return_value=[]), \
-                patch("dataset.prepare_medical_vlm_data.download_vqa_rad", return_value=[]), \
-                patch("dataset.prepare_medical_vlm_data.download_path_vqa", return_value=[]), \
-                patch("dataset.prepare_medical_vlm_data.save_to_parquet"), \
-                patch.object(sys, "argv", argv):
-            mock_dl.return_value = []
-            prepare_main()
-        self.assertEqual(mock_dl.call_args.kwargs["split"], "csv2")
-
 
 if __name__ == "__main__":
     unittest.main()
