@@ -13,14 +13,14 @@ Output columns:
 Fast-SFT recommended usage (~50K unique medical + 2K general):
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft.parquet \
-        --mix_general_ratio 0.05 \
+        --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
 
 Full dataset (deduplicated):
     python dataset/prepare_medical_vlm_data.py \
         --output_path ./dataset/medical_vlm_sft_full.parquet \
         --max_pmc_vqa 0 \
-        --mix_general_ratio 0.05 \
+        --mix_general_ratio 0.1 \
         --general_parquet ./dataset/sft_i2t.parquet
 """
 
@@ -190,7 +190,7 @@ def main():
     parser.add_argument("--max_pmc_vqa",       type=int,   default=50000,
                         help="Max unique rows from PMC-VQA after dedup (default: 50000; set to 0 for all)")
     parser.add_argument("--mix_general_ratio", type=float, default=0.1,
-                        help="Fraction 0.0–1.0 of final dataset from general parquet (default: 0.1)")
+                        help="Fraction 0.0–1.0 of final dataset from general parquet (default: %(default)s)")
     parser.add_argument("--general_parquet",   default="./dataset/sft_i2t.parquet")
     parser.add_argument("--seed",              type=int,   default=42)
     parser.add_argument("--image_quality",     type=int,   default=85,
@@ -214,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```

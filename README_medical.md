@@ -60,14 +60,14 @@ Download and convert [PMC-VQA](https://huggingface.co/datasets/FreedomIntelligen
 python dataset/prepare_medical_vlm_data.py \
     --output_path ./dataset/medical_vlm_sft.parquet \
     --max_pmc_vqa 50000 \
-    --mix_general_ratio 0.05 \
+    --mix_general_ratio 0.1 \
     --general_parquet ./dataset/sft_i2t.parquet
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--max_pmc_vqa` | `50000` | Unique PMC-VQA rows after dedup (0 = all ~227K) |
-| `--mix_general_ratio` | `0.05` | Fraction of final rows drawn from general parquet |
+| `--mix_general_ratio` | `0.1` | Fraction of final rows drawn from general parquet |
 | `--general_parquet` | `./dataset/sft_i2t.parquet` | Source of general VLM data for mixing |
 | `--image_quality` | `85` | JPEG compression quality (lower = smaller files) |
 
@@ -79,7 +79,7 @@ The script deduplicates on normalized `(question, answer)` **before** applying t
 python dataset/prepare_medical_vlm_data.py \
     --output_path ./dataset/medical_vlm_sft_full.parquet \
     --max_pmc_vqa 0 \
-    --mix_general_ratio 0.05 \
+    --mix_general_ratio 0.1 \
     --general_parquet ./dataset/sft_i2t.parquet
 ```
 
