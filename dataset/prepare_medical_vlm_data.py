@@ -47,6 +47,22 @@ _A_FIELDS = ("Answer", "answer")
 _CHOICE_LETTERS = ("A", "B", "C", "D")
 
 
+def _parse_mix_general_ratio(value: str) -> float:
+    """Parse --mix_general_ratio; must be [0.0, 1.0) to avoid div-by-zero."""
+    try:
+        ratio = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "mix_general_ratio must be a float"
+        ) from exc
+    if ratio < 0.0 or ratio >= 1.0:
+        raise argparse.ArgumentTypeError(
+            "mix_general_ratio must satisfy 0.0 <= r < 1.0 "
+            "(r=0 disables general mix; r=1 is invalid)"
+        )
+    return ratio
+
+
 def _open_image_field(img_field) -> "Image.Image | None":
     try:
         if isinstance(img_field, dict) and "bytes" in img_field:
@@ -189,8 +205,15 @@ def main():
     parser.add_argument("--output_path",       default="./dataset/medical_vlm_sft.parquet")
     parser.add_argument("--max_pmc_vqa",       type=int,   default=50000,
                         help="Max unique rows from PMC-VQA after dedup (default: 50000; set to 0 for all)")
-    parser.add_argument("--mix_general_ratio", type=float, default=0.1,
-                        help="Fraction 0.0–1.0 of final dataset from general parquet (default: %(default)s)")
+    parser.add_argument(
+        "--mix_general_ratio",
+        type=_parse_mix_general_ratio,
+        default=0.1,
+        help=(
+            "Fraction in [0.0, 1.0) of final rows from general parquet; "
+            "0 disables mix (default: %(default)s)"
+        ),
+    )
     parser.add_argument("--general_parquet",   default="./dataset/sft_i2t.parquet")
     parser.add_argument("--seed",              type=int,   default=42)
     parser.add_argument("--image_quality",     type=int,   default=85,

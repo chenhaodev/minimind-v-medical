@@ -67,7 +67,7 @@ python dataset/prepare_medical_vlm_data.py \
 | Flag | Default | Meaning |
 |---|---|---|
 | `--max_pmc_vqa` | `50000` | Unique PMC-VQA rows after dedup (0 = all ~227K) |
-| `--mix_general_ratio` | `0.1` | Fraction of final rows drawn from general parquet |
+| `--mix_general_ratio` | `0.1` | Fraction in `[0.0, 1.0)` from general parquet; `0` disables mix |
 | `--general_parquet` | `./dataset/sft_i2t.parquet` | Source of general VLM data for mixing |
 | `--image_quality` | `85` | JPEG compression quality (lower = smaller files) |
 
