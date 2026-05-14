@@ -4,7 +4,7 @@ A medical-domain Vision-Language Model (VLM) built on top of [MiniMind-V](https:
 
 - **LLM backbone**: [`full_sft_medical_768.pth`](https://github.com/chenhaodev/minimind-medical-models) — a 65M-parameter LLM pretrained and SFT'd on bilingual medical text (HuatuoGPT, CMtMedQA, ChatDoctor, MedRAG/textbooks, etc.)
 - **Vision encoder**: frozen SigLIP2 (`siglip2-base-p32-256-ve`, 256 × 256 input)
-- **VLM training data**: PMC-VQA + SLAKE + VQA-RAD + PathVQA + optional general visual grounding mix
+- **VLM training data**: PMC-VQA (csv2, 2.2 GB) + SLAKE + VQA-RAD + PathVQA + optional general visual grounding mix
 - **No architecture changes** from upstream — only the backbone weights and training data differ
 
 ---
@@ -52,11 +52,7 @@ cp /tmp/medical-models/full_sft_medical_768.pth ./out/
 
 ## Data Preparation
 
-Downloads medical VQA datasets from HuggingFace, deduplicates on-the-fly, converts to parquet, and optionally mixes in a sample from a general `sft_i2t.parquet`.
-
-PMC-VQA multi-choice answers (stored as letters "A"/"B"/"C"/"D") are automatically resolved to full choice text so all sources produce a consistent open-ended format.
-
-The PMC-VQA loader requires HuggingFace `trust_remote_code=True`; only run against trusted dataset sources.
+Downloads PMC-VQA + SLAKE + VQA-RAD + PathVQA from HuggingFace, deduplicates on `(question, answer)`, and writes a parquet (`conversations` JSON + `image_bytes`). PMC-VQA multi-choice answers (A/B/C/D) are auto-resolved to their full text. Defaults to the PMC-VQA `csv2` split (~2.2 GB / ~127K rows); pass `--pmc_vqa_split all` for the full ~21 GB archive.
 
 ### Recommended dataset (~63K rows)
 
@@ -75,66 +71,16 @@ python dataset/prepare_medical_vlm_data.py \
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--max_pmc_vqa` | `50000` | Unique PMC-VQA rows after dedup (0 = all ~227K) |
-| `--pmc_vqa_split` | `all` | Which PMC-VQA halves to download: `all` ≈ 21 GB / ~227K rows, `csv2` ≈ 2.2 GB / ~127K rows, `none` skips PMC-VQA entirely |
+| `--max_pmc_vqa` | `50000` | Unique PMC-VQA rows after dedup (0 = all) |
+| `--pmc_vqa_split` | `csv2` | Which PMC-VQA halves to download: `csv2` ≈ 2.2 GB / ~127K rows (default), `all` ≈ 21 GB / ~227K rows, `none` skips PMC-VQA entirely |
 | `--max_slake` | `5000` | Unique SLAKE rows after dedup (0 = skip source) |
 | `--max_vqa_rad` | `3000` | Unique VQA-RAD rows after dedup (0 = skip source) |
 | `--max_path_vqa` | `5000` | Unique PathVQA rows after dedup (0 = skip source) |
 | `--mix_general_ratio` | `0.1` | Fraction in `[0.0, 1.0)` from general parquet; `0` disables mix |
 | `--general_parquet` | `./dataset/sft_i2t.parquet` | Source of general VLM data for mixing |
-| `--seed` | `42` | Random seed for general-data sampling and shuffle |
 | `--image_quality` | `85` | JPEG compression quality (lower = smaller files) |
 
-Deduplication runs on normalized `(question, answer)` per source **before** applying the cap, so `--max_X N` always yields N unique samples.
-
-### PMC-VQA only (original behaviour)
-
-```bash
-python dataset/prepare_medical_vlm_data.py \
-    --output_path ./dataset/medical_vlm_sft.parquet \
-    --max_slake 0 \
-    --max_vqa_rad 0 \
-    --max_path_vqa 0 \
-    --mix_general_ratio 0.1 \
-    --general_parquet ./dataset/sft_i2t.parquet
-```
-
-### Low-bandwidth setup
-
-The default first run pulls the full PMC-VQA archive (~21 GB: `images.zip` 18.9 GB + `images_2.zip` 2.2 GB). Use `--pmc_vqa_split` to cut that cost:
-
-| Split | Network | Disk after extract | Candidate rows |
-|---|---|---|---|
-| `all` (default) | ~21 GB | ~31 GB | ~227K |
-| `csv2` | ~2.2 GB | ~5 GB | ~127K |
-| `none` | 0 GB | 0 GB | 0 (use SLAKE/VQA-RAD/PathVQA only) |
-
-`--max_pmc_vqa` still caps rows after download for any split. Example using only the smaller `csv2` half:
-
-```bash
-python dataset/prepare_medical_vlm_data.py \
-    --output_path ./dataset/medical_vlm_sft.parquet \
-    --pmc_vqa_split csv2 \
-    --max_pmc_vqa 50000 \
-    --max_slake 5000 \
-    --max_vqa_rad 3000 \
-    --max_path_vqa 5000 \
-    --mix_general_ratio 0.1 \
-    --general_parquet ./dataset/sft_i2t.parquet
-```
-
-To skip PMC-VQA entirely (relies on SLAKE + VQA-RAD + PathVQA only, ~22K rows < 500 MB):
-
-```bash
-python dataset/prepare_medical_vlm_data.py \
-    --output_path ./dataset/medical_vlm_sft.parquet \
-    --pmc_vqa_split none \
-    --max_slake 5000 \
-    --max_vqa_rad 3000 \
-    --max_path_vqa 5000 \
-    --mix_general_ratio 0.1 \
-    --general_parquet ./dataset/sft_i2t.parquet
-```
+Dedup runs per source **before** the cap, so `--max_X N` always yields N unique rows. To opt into the full archive use `--pmc_vqa_split all`; to skip PMC-VQA entirely (SLAKE + VQA-RAD + PathVQA only, ~22K rows < 500 MB) use `--pmc_vqa_split none`.
 
 ---
 
