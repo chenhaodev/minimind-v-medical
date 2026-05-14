@@ -107,6 +107,17 @@ def _make_rgb_image() -> Image.Image:
     return Image.new("RGB", (4, 4), color=(100, 150, 200))
 
 
+def _run_download(fn, rows: list, column_names: list, **kwargs) -> list:
+    mock_ds = MagicMock()
+    mock_ds.__iter__ = MagicMock(side_effect=lambda: iter(rows))
+    mock_ds.__len__ = MagicMock(return_value=len(rows))
+    mock_ds.column_names = column_names
+    mock_datasets = MagicMock()
+    mock_datasets.load_dataset.return_value = mock_ds
+    with patch.dict("sys.modules", {"datasets": mock_datasets}):
+        return fn(**kwargs)
+
+
 def _make_slake_row(question: str, answer: str, img: "Image.Image | None" = None) -> dict:
     return {
         "img_content": img or _make_rgb_image(),
@@ -118,18 +129,7 @@ def _make_slake_row(question: str, answer: str, img: "Image.Image | None" = None
 
 class TestDownloadSlake(unittest.TestCase):
     def _run(self, rows: list, **kwargs) -> list:
-        """Run download_slake with a mocked HuggingFace dataset."""
-        mock_ds = MagicMock()
-        mock_ds.__iter__ = MagicMock(return_value=iter(rows))
-        mock_ds.__len__ = MagicMock(return_value=len(rows))
-        mock_ds.column_names = ["img_content", "question", "answer", "q_lang"]
-
-        # The function does `from datasets import load_dataset` at call time,
-        # so we inject a mock module into sys.modules before the import runs.
-        mock_datasets = MagicMock()
-        mock_datasets.load_dataset.return_value = mock_ds
-        with patch.dict("sys.modules", {"datasets": mock_datasets}):
-            return download_slake(**kwargs)
+        return _run_download(download_slake, rows, ["img_content", "question", "answer", "q_lang"], **kwargs)
 
     def test_returns_one_row_per_valid_sample(self):
         rows = [
@@ -204,14 +204,7 @@ def _make_vqa_rad_row(question: str, answer: str, img: "Image.Image | None" = No
 
 class TestDownloadVqaRad(unittest.TestCase):
     def _run(self, rows: list, **kwargs) -> list:
-        mock_ds = MagicMock()
-        mock_ds.__iter__ = MagicMock(return_value=iter(rows))
-        mock_ds.__len__ = MagicMock(return_value=len(rows))
-        mock_ds.column_names = ["image", "question", "answer", "answer_type"]
-        mock_datasets = MagicMock()
-        mock_datasets.load_dataset.return_value = mock_ds
-        with patch.dict("sys.modules", {"datasets": mock_datasets}):
-            return download_vqa_rad(**kwargs)
+        return _run_download(download_vqa_rad, rows, ["image", "question", "answer", "answer_type"], **kwargs)
 
     def test_returns_one_row_per_valid_sample(self):
         rows = [
@@ -278,14 +271,7 @@ def _make_path_vqa_row(question: str, answer: str, img: "Image.Image | None" = N
 
 class TestDownloadPathVqa(unittest.TestCase):
     def _run(self, rows: list, **kwargs) -> list:
-        mock_ds = MagicMock()
-        mock_ds.__iter__ = MagicMock(return_value=iter(rows))
-        mock_ds.__len__ = MagicMock(return_value=len(rows))
-        mock_ds.column_names = ["image", "question", "answer", "answer_type"]
-        mock_datasets = MagicMock()
-        mock_datasets.load_dataset.return_value = mock_ds
-        with patch.dict("sys.modules", {"datasets": mock_datasets}):
-            return download_path_vqa(**kwargs)
+        return _run_download(download_path_vqa, rows, ["image", "question", "answer", "answer_type"], **kwargs)
 
     def test_returns_one_row_per_valid_sample(self):
         rows = [
@@ -341,36 +327,29 @@ class TestDownloadPathVqa(unittest.TestCase):
         self.assertEqual(img.format, "JPEG")
 
 
-_DEFAULT_CHOICES = ("Liver", "Kidney", "Pancreas", "Spleen")
-
-
 def _make_pmc_vqa_row(
     question: str,
     answer: str,
-    choices: tuple = _DEFAULT_CHOICES,
+    choices: tuple = ("Liver", "Kidney", "Pancreas", "Spleen"),
     img: "Image.Image | None" = None,
 ) -> dict:
+    padded = list(choices) + [""] * (4 - len(choices))
     return {
         "Question": question,
         "Answer": answer,
-        "Choice A": choices[0] if len(choices) > 0 else "",
-        "Choice B": choices[1] if len(choices) > 1 else "",
-        "Choice C": choices[2] if len(choices) > 2 else "",
-        "Choice D": choices[3] if len(choices) > 3 else "",
+        "Choice A": padded[0],
+        "Choice B": padded[1],
+        "Choice C": padded[2],
+        "Choice D": padded[3],
         "Figure": img or _make_rgb_image(),
     }
 
 
 class TestDownloadPmcVqa(unittest.TestCase):
+    _COLS = ["Question", "Answer", "Choice A", "Choice B", "Choice C", "Choice D", "Figure"]
+
     def _run(self, rows: list, **kwargs) -> list:
-        mock_ds = MagicMock()
-        mock_ds.__iter__ = MagicMock(return_value=iter(rows))
-        mock_ds.__len__ = MagicMock(return_value=len(rows))
-        mock_ds.column_names = ["Question", "Answer", "Choice A", "Choice B", "Choice C", "Choice D", "Figure"]
-        mock_datasets = MagicMock()
-        mock_datasets.load_dataset.return_value = mock_ds
-        with patch.dict("sys.modules", {"datasets": mock_datasets}):
-            return download_pmc_vqa(**kwargs)
+        return _run_download(download_pmc_vqa, rows, self._COLS, **kwargs)
 
     def test_resolves_letter_answer_to_choice_text(self):
         rows = [_make_pmc_vqa_row("What organ is this?", "A")]
